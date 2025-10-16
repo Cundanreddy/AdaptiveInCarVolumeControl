@@ -1,211 +1,138 @@
-#![no_main]
-#![no_std]
+// src/main.rs (host simulation)
+use std::thread::sleep;
+use std::time::{Duration, Instant};
 
-// HAL-version-matched implementation scaffold for `stm32f4xx-hal = "0.15"` and `rtic = "0.7"`.
-// This file implements:
-// - ADC circular DMA capture into a static buffer
-// - Half/full transfer handling to compute RMS on each half
-// - Simple gain smoother
-// - I2S (SPI3) DMA transmit skeleton for PCM5102 (TX only)
-//
-// IMPORTANT: HAL APIs evolve. This file is intended to compile with the 0.15-era APIs,
-// but you may need to change a few type/constructor names depending on the exact patch
-// release you use. All <ADAPT> comments indicate places you may need to tweak.
+const SAMPLE_RATE: usize = 48000;
+const CHUNK_SAMPLES: usize = 480; // 10 ms frames
+const L_DESIRED_DB: f32 = 75.0; // target perceived playback level
+const USER_OFFSET_DB: f32 = 0.0;
 
-use core::sync::atomic::{AtomicBool, Ordering};
-use core::cell::RefCell;
-use cortex_m::interrupt::Mutex;
-use libm::{sqrt, powf, log10f};
+fn speed_to_noise(speed_kmh: f32) -> f32 {
+    // simple model: noise increases with log(speed)
+    let a = 6.0;
+    let b = 40.0;
+    a * (speed_kmh + 1.0).ln() + b
+}
 
-use panic_halt as _;
-use stm32f4xx_hal as hal;
-use hal::{prelude::*, pac, adc::{Adc, config::AdcConfig}, dma::{config::DmaConfig, Stream0, StreamsTuple, Transfer}, gpio::Analog, i2s::{I2sExt, I2s}, serial::Serial};
+struct Smoother {
+    value_db: f32,
+    tau_attack: f32,
+    tau_release: f32,
+    last_update: Instant,
+}
 
-use rtic::app;
-
-// Buffer length must be even since we treat it as two halves
-pub const ADC_BUF_LEN: usize = 512;
-
-// Place ADC buffer in a known memory section and make it mutable static for DMA
-#[link_section = ".axisram.data"]
-static mut ADC_BUFFER: [u16; ADC_BUF_LEN] = [0; ADC_BUF_LEN];
-
-// Flag set by DMA half/full transfer callbacks (RTIC interrupt context)
-static HALF_READY: AtomicBool = AtomicBool::new(false);
-static FULL_READY: AtomicBool = AtomicBool::new(false);
-
-#[app(device = pac, peripherals = true)]
-mod app {
-    #[shared]
-    struct Shared {
-        // put shared resources here if needed
+impl Smoother {
+    fn new(init_db: f32, tau_attack: f32, tau_release: f32) -> Self {
+        Smoother {
+            value_db: init_db,
+            tau_attack,
+            tau_release,
+            last_update: Instant::now(),
+        }
     }
-
-    #[local]
-    struct Local {
-        adc: Adc<pac::ADC1>,
-        // The circular DMA transfer owning the buffer (type depends on HAL)
-        // adc_circ: Transfer<...>, // left out here because types vary across hal versions
-
-        // Smoothing / computed values (local to the processing task)
-        smoothed_level: f32,
-        target_gain: f32,
-
-        // serial for debug
-        serial: hal::serial::Tx<pac::USART2>,
-    }
-
-    #[init]
-    fn init(cx: init::Context) -> (Shared, Local) {
-        // Enable DWT cycle counter for RTIC scheduling (optional)
-        cx.core.DCB.enable_trace();
-        cx.core.DWT.enable_cycle_counter();
-
-        let dp = cx.device;
-
-        // --- clocks
-        let rcc = dp.RCC.constrain();
-        let clocks = rcc.cfgr
-            .use_hse(8.mhz())
-            .sysclk(168.mhz())
-            .pclk1(42.mhz())
-            .freeze();
-
-        // --- GPIO
-        let gpioa = dp.GPIOA.split();
-        let gpiob = dp.GPIOB.split();
-
-        // ADC pin: PA0 (adjust as needed)
-        let mic_pin = gpioa.pa0.into_analog();
-
-        // Serial TX for debug on PA2 (USART2)
-        let tx_pin = gpioa.pa2.into_alternate_af7();
-        let rx_pin = gpioa.pa3.into_alternate_af7();
-        let serial = Serial::usart2(dp.USART2, (tx_pin, rx_pin), 115_200.bps(), clocks).unwrap();
-        let (tx, _rx) = serial.split();
-
-        // --- ADC
-        let mut adc = Adc::adc1(dp.ADC1, true, AdcConfig::default());
-        adc.configure_channel(&mic_pin, hal::adc::config::Sequence::One, hal::adc::config::SampleTime::Cycles_15);
-
-        // --- DMA setup for ADC -> memory (circular)
-        // Note: stm32f4 DMA mapping: ADC1 -> DMA2 Stream0 Channel0 (common on many F4 parts)
-        let streams = StreamsTuple::new(dp.DMA2);
-        let stream0 = streams.0; // Stream0 as example -- confirm mapping for your MCU
-
-        // Create DMA config: peripheral-to-memory, circular, transfer complete & half-transfer interrupt enabled
-        let dma_cfg = DmaConfig::default()
-            .memory_increment(true)
-            .peripheral_increment(false)
-            .priority(hal::dma::config::Priority::High)
-            .circular(true);
-
-        // <ADAPT> The exact Transfer/CircBuffer construction may vary across hal versions.
-        // Here we show the intended pattern: create a circular buffer transfer from ADC data register to ADC_BUFFER.
-
-        // SAFETY: ADC_BUFFER is exclusively used by DMA peripheral + read-only processing in interrupt/task contexts.
-        let circ = unsafe {
-            // Using HAL helper to create a CircBuffer transfer if available
-            // Example (pseudo):
-            // let circ = Transfer::init_peripheral_to_memory(stream0, adc.get_dma_peripheral(), &mut ADC_BUFFER, None, dma_cfg);
-            // If your hal provides `adc.with_dma()` or `adc.read_exact()` helpers, use those helpers instead.
-            core::ptr::null_mut()
+    fn step(&mut self, target_db: f32) -> f32 {
+        let now = Instant::now();
+        let dt = (now - self.last_update).as_secs_f32();
+        self.last_update = now;
+        if dt <= 0.0 { return self.value_db; }
+        let tau = if target_db < self.value_db {
+            // getting quieter -> release (slower)
+            self.tau_release
+        } else {
+            // getting louder -> attack (faster)
+            self.tau_attack
         };
-
-        // --- I2S (SPI3) TX setup (skeleton)
-        // Connect to PCM5102: typically SPI3 in I2S mode (PB3 SCK, PB5 SD, PA15 WS etc. Verify with your board)
-        // We'll set up I2S peripheral and DMA transmit similarly to ADC but for memory->peripheral.
-
-        // <ADAPT> Use the HAL i2s ext: `let i2s = dp.SPI3.i2s(...);` patterns differ by hal version.
-
-        // Start the ADC DMA transfer (API depends on HAL). We assume it's started here.
-        // Example: circ.start(|adc_periph| { adc_periph.enable_dma(); });
-
-        // Schedule the periodic processing task to run every 50 ms
-        cx.schedule.process_audio(cx.start + 84_000_000.cycles()).unwrap(); // 50ms @168MHz ~8.4M cycles
-
-        // return shared and local resources
-        (
-            Shared {},
-            Local {
-                adc,
-                smoothed_level: 0.0,
-                target_gain: 1.0,
-                serial: tx,
-            },
-        )
+        let alpha = 1.0 - (-dt / tau).exp();
+        self.value_db += alpha * (target_db - self.value_db);
+        self.value_db
     }
+}
 
-    // Periodic processing task: read which half of buffer is ready (via flags set from DMA interrupt), compute RMS and update gain
-    #[task(resources = [smoothed_level, target_gain, serial])]
-    fn process_audio(cx: process_audio::Context) {
-        // Check DMA flags set by interrupts
-        if HALF_READY.swap(false, Ordering::SeqCst) {
-            // compute RMS on first half
-            let half = unsafe { &ADC_BUFFER[0..(ADC_BUF_LEN/2)] };
-            let rms = rms_u16_block(half);
-            // simple smoothing
-            *cx.local.smoothed_level = smooth(*cx.local.smoothed_level, rms, 0.95);
+fn db_to_lin(db: f32) -> f32 {
+    (10.0f32).powf(db / 20.0)
+}
 
-            // compute gain mapping (example: keep target_gain inversely proportional to noise)
-            let noise_db = lin_to_db((*cx.local.smoothed_level).max(1e-6));
-            let desired_db = -0.5 * (noise_db - (-40.0)); // tune constants
-            *cx.local.target_gain = db_to_lin(desired_db);
+// Simple soft limiter: if |sample| > threshold => compress to avoid clip
+fn soft_limit(sample: f32, threshold: f32) -> f32 {
+    let abs = sample.abs();
+    if abs <= threshold { sample }
+    else {
+        let sign = sample.signum();
+        // gentle compression beyond threshold (e.g., sqrt curve)
+        let exceeded = (abs - threshold) / (1.0 + abs - threshold);
+        sign * (threshold + exceeded)
+    }
+}
 
-            // optional: send debug byte (not async-safe; keep minimal)
-            let _ = cx.local.serial.write(b'H');
+fn apply_gain_and_limit(input: &[i16], gain_lin: f32) -> Vec<i16> {
+    let mut out = Vec::with_capacity(input.len());
+    let max_i16 = i16::MAX as f32;
+    let threshold = 0.98 * max_i16;
+    for &s in input {
+        let s_f = s as f32;
+        let mut o = s_f * gain_lin;
+        o = soft_limit(o, threshold);
+        // clamp
+        let o_clamped = o.max(-max_i16).min(max_i16);
+        out.push(o_clamped as i16);
+    }
+    out
+}
+
+fn mock_get_cabin_noise_db(t: f32) -> f32 {
+    // simulate a varying cabin noise in dB SPL
+    // base 60 dB, plus slow sine modulation + transient bumps
+    let base = 60.0;
+    base + 5.0 * (0.2 * t).sin() + 8.0 * (0.5 * t).sin()
+}
+
+fn mock_get_speed_kmh(t: f32) -> f32 {
+    // simulate speed between 0 and 120
+    60.0 + 40.0 * (0.05 * t).sin()
+}
+
+fn main() {
+    let mut smoother = Smoother::new(0.0, 0.1, 1.0); // tau_attack=0.1s, tau_release=1s
+    let mut t = 0.0f32;
+    let dt = CHUNK_SAMPLES as f32 / SAMPLE_RATE as f32;
+    for _iter in 0..1000 {
+        // 1) read simulated sensors
+        let cabin_db = mock_get_cabin_noise_db(t);
+        let speed = mock_get_speed_kmh(t);
+        let speed_noise = speed_to_noise(speed);
+        let noise_db = cabin_db.max(speed_noise);
+
+        // 2) compute raw gain dB
+        let gain_db_raw = L_DESIRED_DB - noise_db + USER_OFFSET_DB;
+
+        // clamp gain_db within reasonable bounds
+        let gain_db_raw = gain_db_raw.max(-24.0).min(24.0);
+
+        // 3) smooth
+        let gain_db = smoother.step(gain_db_raw);
+
+        // 4) convert to linear
+        let gain_lin = db_to_lin(gain_db);
+
+        // 5) simulate input audio chunk (sine)
+        let mut chunk = vec![0i16; CHUNK_SAMPLES];
+        for n in 0..CHUNK_SAMPLES {
+            let sample = 0.4 * (2.0 * std::f32::consts::PI * 1000.0 * (t + n as f32 / SAMPLE_RATE as f32)).sin() ;
+            chunk[n] = (sample * i16::MAX as f32) as i16;
         }
 
-        if FULL_READY.swap(false, Ordering::SeqCst) {
-            // compute RMS on second half
-            let half = unsafe { &ADC_BUFFER[(ADC_BUF_LEN/2)..ADC_BUF_LEN] };
-            let rms = rms_u16_block(half);
-            *cx.local.smoothed_level = smooth(*cx.local.smoothed_level, rms, 0.95);
-            let noise_db = lin_to_db((*cx.local.smoothed_level).max(1e-6));
-            let desired_db = -0.5 * (noise_db - (-40.0));
-            *cx.local.target_gain = db_to_lin(desired_db);
+        // 6) apply
+        let out_chunk: Vec<i16> = apply_gain_and_limit(&chunk, gain_lin);
 
-            let _ = cx.local.serial.write(b'F');
+        // here you'd send out_chunk to audio device / DMA
+
+        // logging (print every 50 iter)
+        if _iter % 50 == 0 {
+            println!("t={:.2}s speed={:.1} km/h cabin_db={:.1} noise_db={:.1} gain_db={:.2} gain_lin={:.3}",
+                t, speed, cabin_db, noise_db, gain_db, gain_lin);
         }
 
-        // Re-schedule (disabled — needs a monotonic). Re-enable scheduling after adding a monotonic.
-    }
-
-    // DMA interrupt handlers (example names -- adapt to your vector table)
-    // In many HAL setups, the DMA transfer object registers its own interrupt handler callback. If you use that facility,
-    // you can set the HALF_READY/FULL_READY flags there instead of defining interrupts here.
-
-    #[task(binds = DMA2_STREAM0)]
-    fn dma2_stream0(_cx: dma2_stream0::Context) {
-        // Clear interrupt flags on DMA stream and set HALF_READY / FULL_READY accordingly.
-        // This MUST be implemented with the actual peripheral registers or using the HAL helper functions.
-        // Example pseudocode:
-        // if stream.get_half_transfer_flag() { HALF_READY.store(true, Ordering::SeqCst); stream.clear_half_transfer(); }
-        // if stream.get_transfer_complete_flag() { FULL_READY.store(true, Ordering::SeqCst); stream.clear_transfer_complete(); }
-    }
-
-    extern "C" {
-        fn EXTI0();
+        t += dt;
+        sleep(Duration::from_secs_f32(dt)); // simulate real time
     }
 }
-
-// ------------------- Utilities -------------------
-
-/// Compute RMS over a block of ADC samples (u16). Expects 12-bit ADC centered ~2048.
-fn rms_u16_block(buf: &[u16]) -> f32 {
-    let mut sum_sq: f64 = 0.0;
-    for &s in buf.iter() {
-        let v = (s as f32) - 2048.0;
-        let vf = v as f64;
-        sum_sq += vf * vf;
-    }
-    let mean_sq = sum_sq / (buf.len() as f64);
-    sqrt(mean_sq) as f32
-}
-
-fn smooth(prev: f32, input: f32, alpha: f32) -> f32 {
-    alpha * prev + (1.0 - alpha) * input
-}
-
-fn db_to_lin(db: f32) -> f32 { powf(10.0_f32, db / 20.0_f32) }
-fn lin_to_db(lin: f32) -> f32 { 20.0 * log10f(lin.abs().max(1e-12)) }

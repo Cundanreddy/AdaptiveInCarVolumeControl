@@ -1,6 +1,6 @@
-[build]
-target = "thumbv7em-none-eabihf"
+# [build]
+# target = "thumbv7em-none-eabihf"
 
 
-[target.thumbv7em-none-eabihf]
-runner = "cargo-embed"
+# [target.thumbv7em-none-eabihf]
+# runner = "cargo-embed"
