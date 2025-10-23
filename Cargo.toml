@@ -24,6 +24,8 @@ defmt = { version = "1.0.1", optional = true }
 libm = "0.2"
 pac = "0.1.0"
 
+rodio = "0.21.1"
+
 
 
 cpal = "0.16.0"
@@ -44,3 +46,16 @@ lto = true
 [[bin]]
 name = "playback_simulation"
 path = "src/playbackSimulation.rs"
+
+
+[[bin]]
+name = "audio_playback"
+path = "src/audio_playback.rs"
+
+[[bin]]
+name = "audio_playback2"
+path = "src/audio_playback2.rs"
+
+[[bin]]
+name = "audio_playback3"
+path = "src/audio_playback3.rs"
