@@ -26,7 +26,7 @@ pac = "0.1.0"
 
 rodio = "0.21.1"
 
-
+rand = "0.9.2"
 
 cpal = "0.16.0"
 hound = "3.5"         # optional, for reading WAV files
@@ -59,3 +59,15 @@ path = "src/audio_playback2.rs"
 [[bin]]
 name = "audio_playback3"
 path = "src/audio_playback3.rs"
+
+[[bin]]
+name = "audio_playback4"
+path = "src/audio_playback4.rs"
+
+[[bin]]
+name = "audio_playback5"
+path = "src/audio_playback5.rs"
+
+[[bin]]
+name = "audio_playback6"
+path = "src/audio_playback6.rs"
