@@ -1,0 +1,85 @@
+stages:
+  - build_for_ut
+  - unittest
+
+variables:
+  # Path to the Rust crate inside the repo
+  PROJECT_ROOT: "$CI_PROJECT_DIR/AdaptiveIncarVolumeNormalisation"
+  # Directory where cargo will place compiled artifacts for CI (configurable)
+  BUILD_DIR: "$PROJECT_ROOT/build_ut"
+  # Cargo command and flags (kept as variables so they can be tuned)
+  CARGO: "cargo"
+  RUST_IMAGE: "rust:latest"
+  # Control optional steps via CI variables
+  RUN_COVERAGE: "false"     # set to "true" to run coverage via cargo-tarpaulin (Linux runners)
+  RUN_JUNIT: "true"         # set to "false" to skip JUnit report generation
+  # Where test reports will be written
+  REPORT_DIR: "$PROJECT_ROOT/report"
+
+build_for_ut:
+  stage: build_for_ut
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+  tags:
+    - JISVR_Hackathon
+  image: "$RUST_IMAGE"
+  script:
+    - echo "🧹 Cleaning previous builds to avoid mixed artifacts"
+    - rm -rf "$BUILD_DIR"
+    - mkdir -p "$BUILD_DIR"
+    - cd "$PROJECT_ROOT"
+    - echo "📦 Building tests (compile only) into $BUILD_DIR"
+    - $CARGO build --tests --target-dir "$BUILD_DIR"
+    - echo "✅ Build (tests) complete"
+  artifacts:
+    paths:
+      - $BUILD_DIR
+
+##############################
+# Run unit tests and optionally produce JUnit and coverage reports
+unittest:
+  stage: unittest
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+  tags:
+    - JISVR_Hackathon
+  image: "$RUST_IMAGE"
+  before_script:
+    - rustc --version
+    - cargo --version
+  script:
+    - cd "$PROJECT_ROOT"
+    - mkdir -p "$REPORT_DIR"
+    - echo "🚀 Running unit tests"
+    # If JUnit requested, capture JSON and convert to JUnit using cargo2junit
+    - |
+      if [ "$RUN_JUNIT" = "true" ]; then
+        echo "-> Generating JUnit report (cargo2junit)"
+        if ! command -v cargo2junit >/dev/null 2>&1; then
+          cargo install cargo2junit
+        fi
+        # Run tests and capture machine-readable JSON output
+        cargo test --message-format=json > "$REPORT_DIR/tests.json" 2>&1 || true
+        # Convert to junit XML
+        cargo2junit "$REPORT_DIR/tests.json" > "$REPORT_DIR/report.xml" || true
+      else
+        cargo test -- --nocapture 2>&1 | tee "$REPORT_DIR/test_output.txt" || true
+      fi
+    - |
+      if [ "$RUN_COVERAGE" = "true" ]; then
+        echo "-> Running coverage via cargo-tarpaulin"
+        if ! command -v cargo-tarpaulin >/dev/null 2>&1; then
+          cargo install cargo-tarpaulin
+        fi
+        # Produce XML coverage report (compatible with many CI tools)
+        cargo tarpaulin --out Xml --output-dir "$REPORT_DIR" || true
+      else
+        echo "Coverage disabled (set RUN_COVERAGE=true to enable tarpaulin)"
+      fi
+  artifacts:
+    when: always
+    reports:
+      junit: $REPORT_DIR/report.xml
+    paths:
+      - $REPORT_DIR/*
+

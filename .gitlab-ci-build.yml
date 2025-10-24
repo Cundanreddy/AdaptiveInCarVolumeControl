@@ -1,0 +1,48 @@
+stages:
+  - build
+
+variables:
+  # Path to the Rust crate inside the repo
+  PROJECT_ROOT: "$CI_PROJECT_DIR/AdaptiveIncarVolumeNormalisation"
+  # We'll use a build/ directory to collect the cargo target output for artifacts
+  BUILD_DIR: "$PROJECT_ROOT/build"
+  # Command and flags (kept as variables so they can be tuned without changing the script)
+  CARGO: "cargo"
+  CARGO_FLAGS: "build --release"
+  # Docker image to use for the job (can be overridden in CI variables)
+  RUST_IMAGE: "rust:latest"
+  # Enable backtraces for better error messages in CI logs
+  RUST_BACKTRACE: "1"
+  # Artifact name pattern
+  ARTIFACT_NAME: "AdaptiveIncarVolumeNormalisation_build_${CI_COMMIT_SHORT_SHA}"
+
+build:
+  stage: build
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+  tags:
+    - JISVR_Hackathon
+  image: "$RUST_IMAGE"
+  before_script:
+    - rustc --version
+    - cargo --version
+  script:
+    - echo "🚀 Starting Rust/Cargo build job"
+    - cd "$PROJECT_ROOT"
+    - mkdir -p "$BUILD_DIR"
+    # Use cargo with an explicit target-dir so build artifacts land in BUILD_DIR
+    - $CARGO $CARGO_FLAGS --target-dir "$BUILD_DIR"
+    - echo "✅ Build complete"
+    - ls -la "$BUILD_DIR/release" || true
+  artifacts:
+    name: "$ARTIFACT_NAME"
+    paths:
+      - $BUILD_DIR/release/
+    expire_in: 1 week
+    when: always
+  cache:
+    key: "$CI_PROJECT_NAME-cargo"
+    paths:
+      - $CI_PROJECT_DIR/target
+      - $HOME/.cargo/registry
+      - $HOME/.cargo/git

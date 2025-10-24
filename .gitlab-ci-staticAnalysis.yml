@@ -1,0 +1,48 @@
+stages:
+  - StaticAnalysis
+
+variables:
+  # Path to the Rust crate inside the repo
+  PROJECT_DIR: "$CI_PROJECT_DIR/AdaptiveIncarVolumeNormalisation"
+  # Image and commands configurable via CI variables
+  RUST_IMAGE: "rust:latest"
+  CARGO: "cargo"
+  RUSTFMT_FLAGS: "-- --check"
+  CLIPPY_FLAGS: "-- -D warnings"
+  # Whether to run cargo-audit (set to "true" in CI variables to enable)
+  RUN_CARGO_AUDIT: "false"
+
+StaticAnalysis:
+  stage: StaticAnalysis
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+  tags:
+    - JISVR_Hackathon
+  image: "$RUST_IMAGE"
+  before_script:
+    - rustc --version
+    - cargo --version
+  script:
+    - echo "🔎 Starting Rust static analysis (rustfmt + clippy)"
+    - mkdir -p "$PROJECT_DIR/report"
+    - cd "$PROJECT_DIR"
+    - echo "-> Running rustfmt (check)"
+    - $CARGO fmt $RUSTFMT_FLAGS 2>&1 | tee "$PROJECT_DIR/report/rustfmt.txt" || (cat "$PROJECT_DIR/report/rustfmt.txt" && exit 1)
+    - echo "-> Running clippy"
+    - $CARGO clippy $CLIPPY_FLAGS 2>&1 | tee "$PROJECT_DIR/report/clippy.txt" || (cat "$PROJECT_DIR/report/clippy.txt" && exit 1)
+    - |
+        if [ "$RUN_CARGO_AUDIT" = "true" ]; then
+          echo "-> Running cargo-audit"
+          if ! command -v cargo-audit >/dev/null 2>&1; then
+            cargo install cargo-audit
+          fi
+          cargo audit 2>&1 | tee "$PROJECT_DIR/report/cargo_audit.txt" || (cat "$PROJECT_DIR/report/cargo_audit.txt" && exit 1)
+        else
+          echo "cargo-audit disabled (set RUN_CARGO_AUDIT=true to enable)"
+        fi
+  artifacts:
+    name: StaticAnalysis_report
+    paths:
+      - $PROJECT_DIR/report/*
+    when: always
+  allow_failure: false
