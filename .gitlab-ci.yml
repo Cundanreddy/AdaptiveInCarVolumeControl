@@ -1,0 +1,12 @@
+stages:
+  - build
+  - StaticAnalysis
+  - build_for_ut
+  - unittest
+  
+  
+  
+include:
+  - local: '.gitlab-ci-build.yml'
+  - local: '.gitlab-ci-staticAnalysis.yml'
+  - local: '.gitlab-ci-ut.yml'

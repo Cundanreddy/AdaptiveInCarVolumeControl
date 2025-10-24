@@ -3,18 +3,27 @@ stages:
   - unittest
 
 variables:
-  # Path to the Rust crate inside the repo
-  PROJECT_ROOT: "$CI_PROJECT_DIR/AdaptiveIncarVolumeNormalisation"
-  # Directory where cargo will place compiled artifacts for CI (configurable)
-  BUILD_DIR: "$PROJECT_ROOT/build_ut"
-  # Cargo command and flags (kept as variables so they can be tuned)
-  CARGO: "cargo"
-  RUST_IMAGE: "rust:latest"
-  # Control optional steps via CI variables
-  RUN_COVERAGE: "false"     # set to "true" to run coverage via cargo-tarpaulin (Linux runners)
-  RUN_JUNIT: "true"         # set to "false" to skip JUnit report generation
-  # Where test reports will be written
-  REPORT_DIR: "$PROJECT_ROOT/report"
+  # General project paths
+  PROJECT_ROOT: "$CI_PROJECT_DIR/SWE3/Unitconstruction"  #update this path as per your folder structure.
+  BUILD_DIR: "$PROJECT_ROOT/build_ut" #update this path as per your folder structure.
+
+  # Manual build variables
+  MODULES: "module1 module2" #update this path as per your folder structure.
+  MODULE_SRC_SUBDIR: "src" #update this path as per your folder structure.
+  MODULE_INC_SUBDIR: "inc" #update this path as per your folder structure.
+  MAIN_C_PATH: "$PROJECT_ROOT/main.c" #update this path as per your folder structure.
+  COMPILER: gcc   #update  compiler as per your folder structure.
+  COMPILER_FLAGS: "-Wall -Wextra --coverage"
+
+  # CMake + GTest variables
+  PROJECT_DIR: "$CI_PROJECT_DIR/SWE3/Unitconstruction" #update this path as per your folder structure.
+  TEST_REPORT: report.xml
+  COVERAGE_INFO: coverage.info
+  COVERAGE_DIR: coverage_html
+  GTEST_INCLUDE_DIR: /volume1/gtest/googletest/googletest/include
+  GTEST_LIB_DIR: /volume1/gtest/googletest/build/lib
+  CXXFLAGS: "--coverage"
+  LDFLAGS: "--coverage"
 
 build_for_ut:
   stage: build_for_ut
@@ -22,64 +31,112 @@ build_for_ut:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
   tags:
     - JISVR_Hackathon
-  image: "$RUST_IMAGE"
   script:
-    - echo "🧹 Cleaning previous builds to avoid mixed artifacts"
+    - echo "🧹 Cleaning previous builds to avoid mixed object files"
     - rm -rf "$BUILD_DIR"
     - mkdir -p "$BUILD_DIR"
     - cd "$PROJECT_ROOT"
-    - echo "📦 Building tests (compile only) into $BUILD_DIR"
-    - $CARGO build --tests --target-dir "$BUILD_DIR"
-    - echo "✅ Build (tests) complete"
+
+    # Compile modules manually
+    - |
+      for module in $MODULES; do
+        MODULE_SRC="$PROJECT_ROOT/$module/$MODULE_SRC_SUBDIR"
+        MODULE_INC="$PROJECT_ROOT/$module/$MODULE_INC_SUBDIR"
+        MODULE_BUILD_DIR="$BUILD_DIR/$module"
+        mkdir -p "$MODULE_BUILD_DIR"
+        find "$MODULE_SRC" -name "*.c" | while read -r src_file; do
+          base_name=$(basename "$src_file" .c)
+          obj_file="$MODULE_BUILD_DIR/$base_name.o"
+          $COMPILER $COMPILER_FLAGS -I"$MODULE_INC" -c "$src_file" -o "$obj_file"
+        done
+      done
+
+    # Compile main.c
+    - |
+      INCLUDES=""
+      for module in $MODULES; do
+        INCLUDES="$INCLUDES -I$PROJECT_ROOT/$module/$MODULE_INC_SUBDIR"
+      done
+      $COMPILER $COMPILER_FLAGS $INCLUDES -c "$MAIN_C_PATH" -o "$BUILD_DIR/main.o"
+
+    # Link all objects with coverage
+    - find "$BUILD_DIR" -name "*.o" > "$BUILD_DIR/objects.txt"
+    - $COMPILER --coverage -o "$BUILD_DIR/all_modules.exe" $(cat "$BUILD_DIR/objects.txt")
+
+    # Build with CMake and gtest
+    - cd "$BUILD_DIR"
+    - cmake -DCMAKE_CXX_FLAGS="$CXXFLAGS" -DCMAKE_EXE_LINKER_FLAGS="$LDFLAGS" -DGTEST_INCLUDE_DIR=$GTEST_INCLUDE_DIR -DGTEST_LIB_DIR=$GTEST_LIB_DIR ..
+    - make
+
   artifacts:
     paths:
       - $BUILD_DIR
 
 ##############################
-# Run unit tests and optionally produce JUnit and coverage reports
+# Run manual exe + GTest, generate coverage report
 unittest:
   stage: unittest
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
   tags:
     - JISVR_Hackathon
-  image: "$RUST_IMAGE"
-  before_script:
-    - rustc --version
-    - cargo --version
   script:
-    - cd "$PROJECT_ROOT"
-    - mkdir -p "$REPORT_DIR"
-    - echo "🚀 Running unit tests"
-    # If JUnit requested, capture JSON and convert to JUnit using cargo2junit
+    - cd $BUILD_DIR
+
+    # Run manual executable
     - |
-      if [ "$RUN_JUNIT" = "true" ]; then
-        echo "-> Generating JUnit report (cargo2junit)"
-        if ! command -v cargo2junit >/dev/null 2>&1; then
-          cargo install cargo2junit
+      if [ -x ./all_module_tests ]; then
+        echo "🚀 Running manual executable"
+        ./all_module_tests --gtest_output=xml:report.xml || echo "Manual executable failed"
+        echo "📂 Listing files after test run:"
+        ls -l
+        if [ -f report.xml ]; then
+          echo "✅ report.xml found!"
+        else
+          echo "❌ report.xml NOT found!"
         fi
-        # Run tests and capture machine-readable JSON output
-        cargo test --message-format=json > "$REPORT_DIR/tests.json" 2>&1 || true
-        # Convert to junit XML
-        cargo2junit "$REPORT_DIR/tests.json" > "$REPORT_DIR/report.xml" || true
       else
-        cargo test -- --nocapture 2>&1 | tee "$REPORT_DIR/test_output.txt" || true
+        echo "⚠️ Manual executable not found"
       fi
+
+
+    # Show gcda files
+    - echo "📄 Listing .gcda files:"
+    - find . -name '*.gcda'
+
+    # Collect coverage
+    - /usr/bin/lcov --capture --directory . --output-file $COVERAGE_INFO
+
+    # Remove GTest, system, and external includes
+    - /usr/bin/lcov --remove $COVERAGE_INFO '/usr/*' '/volume1/gtest/*' '/opt/*' --output-file $COVERAGE_INFO
+
+    # Optionally, only keep your project code (adjust path as needed)
     - |
-      if [ "$RUN_COVERAGE" = "true" ]; then
-        echo "-> Running coverage via cargo-tarpaulin"
-        if ! command -v cargo-tarpaulin >/dev/null 2>&1; then
-          cargo install cargo-tarpaulin
-        fi
-        # Produce XML coverage report (compatible with many CI tools)
-        cargo tarpaulin --out Xml --output-dir "$REPORT_DIR" || true
+      /usr/bin/lcov --extract $COVERAGE_INFO "$CI_PROJECT_DIR/SWE3/Unitconstruction/*" --output-file $COVERAGE_INFO
+
+    # Generate HTML coverage report
+    - genhtml $COVERAGE_INFO --output-directory $COVERAGE_DIR
+
+    # Evaluate coverage % and enforce threshold
+    - |
+      COVERAGE=$(lcov --summary $COVERAGE_INFO | grep lines | awk '{print $2}' | sed 's/%//')
+      echo "📊 Total Coverage: $COVERAGE%"
+
+      if (( $(echo "$COVERAGE < 50" | bc -l) )); then
+        echo "❌ Coverage too low (<50%)"
+        exit 1
+      elif (( $(echo "$COVERAGE >= 90" | bc -l) )); then
+        echo "✅ Excellent coverage (>90%)"
       else
-        echo "Coverage disabled (set RUN_COVERAGE=true to enable tarpaulin)"
+        echo "⚠️ Coverage acceptable (50–90%)"
       fi
+
   artifacts:
     when: always
     reports:
-      junit: $REPORT_DIR/report.xml
+      junit: SWE3/Unitconstruction/build_ut/report.xml
     paths:
-      - $REPORT_DIR/*
+      - SWE3/Unitconstruction/build_ut/report.xml
+      - SWE3/Unitconstruction/build_ut/coverage.info
+      - SWE3/Unitconstruction/build_ut/coverage_html
 

@@ -2,47 +2,51 @@ stages:
   - StaticAnalysis
 
 variables:
-  # Path to the Rust crate inside the repo
-  PROJECT_DIR: "$CI_PROJECT_DIR/AdaptiveIncarVolumeNormalisation"
-  # Image and commands configurable via CI variables
-  RUST_IMAGE: "rust:latest"
-  CARGO: "cargo"
-  RUSTFMT_FLAGS: "-- --check"
-  CLIPPY_FLAGS: "-- -D warnings"
-  # Whether to run cargo-audit (set to "true" in CI variables to enable)
-  RUN_CARGO_AUDIT: "false"
-
+  PROJECT_DIR: $CI_PROJECT_DIR/SWE3/Unitconstruction # Change this path according to your project path
+  INCLUDE_FILE: "-I$PROJECT_DIR/module1/inc -I$PROJECT_DIR/module2/inc"  # Change this path according to your project path
+  SOURCE_FILE:  "$PROJECT_DIR/module1/src $PROJECT_DIR/module2/src"  # Change this path according to your project path
+ 
 StaticAnalysis:
   stage: StaticAnalysis
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
   tags:
     - JISVR_Hackathon
-  image: "$RUST_IMAGE"
-  before_script:
-    - rustc --version
-    - cargo --version
   script:
-    - echo "🔎 Starting Rust static analysis (rustfmt + clippy)"
-    - mkdir -p "$PROJECT_DIR/report"
-    - cd "$PROJECT_DIR"
-    - echo "-> Running rustfmt (check)"
-    - $CARGO fmt $RUSTFMT_FLAGS 2>&1 | tee "$PROJECT_DIR/report/rustfmt.txt" || (cat "$PROJECT_DIR/report/rustfmt.txt" && exit 1)
-    - echo "-> Running clippy"
-    - $CARGO clippy $CLIPPY_FLAGS 2>&1 | tee "$PROJECT_DIR/report/clippy.txt" || (cat "$PROJECT_DIR/report/clippy.txt" && exit 1)
+    - echo "Running Cppcheck on all .c files..."
+    - mkdir -p $PROJECT_DIR/report
+    - cd $PROJECT_DIR
+    - /volume1/cppcheck-2.15.0/cppcheck --check-level=exhaustive --addon=/volume1/addons/misra --addon=/volume1/addons/cert --force --enable=all --xml --output-file=$PROJECT_DIR/report/cppcheck_report.xml $INCLUDE_FILE $SOURCE_FILE
+    - cat $PROJECT_DIR/report/cppcheck_report.xml
+    - cd $PROJECT_DIR
+    - /volume1/python3.8 /volume1/cppcheck-2.15.0/htmlreport/cppcheck-htmlreport --file=$PROJECT_DIR/report/cppcheck_report.xml --report-dir=$PROJECT_DIR/html_report
     - |
-        if [ "$RUN_CARGO_AUDIT" = "true" ]; then
-          echo "-> Running cargo-audit"
-          if ! command -v cargo-audit >/dev/null 2>&1; then
-            cargo install cargo-audit
-          fi
-          cargo audit 2>&1 | tee "$PROJECT_DIR/report/cargo_audit.txt" || (cat "$PROJECT_DIR/report/cargo_audit.txt" && exit 1)
+        if grep -q 'severity="style"' "$PROJECT_DIR/report/cppcheck_report.xml"; then
+         echo "Cppcheck found MISRA violations. Please fix the issues before pushing."
+         exit 1
         else
-          echo "cargo-audit disabled (set RUN_CARGO_AUDIT=true to enable)"
+          echo "No MISRA violations found."
         fi
+    - |
+        if grep -q 'severity="error"' "$PROJECT_DIR/report/cppcheck_report.xml"; then
+         echo "Cppcheck found MISRA violations. Please fix the issues before pushing."
+         exit 1
+        else
+          echo "No MISRA violations found."
+        fi
+    - |
+        if grep -q 'severity="warning"' "$PROJECT_DIR/report/cppcheck_report.xml"; then
+         echo "Cppcheck found MISRA violations. Please fix the issues before pushing."
+         exit 1
+        else
+          echo "No MISRA violations found."
+        fi
+
   artifacts:
     name: StaticAnalysis_report
     paths:
-      - $PROJECT_DIR/report/*
+      - $PROJECT_DIR/html_report/*
+    reports:
+      codequality: $PROJECT_DIR/html_report/index.html
     when: always
   allow_failure: false

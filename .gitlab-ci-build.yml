@@ -2,47 +2,49 @@ stages:
   - build
 
 variables:
-  # Path to the Rust crate inside the repo
-  PROJECT_ROOT: "$CI_PROJECT_DIR/AdaptiveIncarVolumeNormalisation"
-  # We'll use a build/ directory to collect the cargo target output for artifacts
+  PROJECT_ROOT: "$CI_PROJECT_DIR/SWE3/Unitconstruction"  # <-- Change this path as per your project folder structure
+  MODULES: "module1 module2"                             # <-- Change this path as per your project folder structure
+  MODULE_SRC_SUBDIR: "src"                               # <-- Change this path as per your project folder structure
+  MODULE_INC_SUBDIR: "inc"                               # <-- Change this path as per your project folder structure
+  MAIN_C_PATH: "$PROJECT_ROOT/main.c"                    # <-- Change this path as per your project folder structure
   BUILD_DIR: "$PROJECT_ROOT/build"
-  # Command and flags (kept as variables so they can be tuned without changing the script)
-  CARGO: "cargo"
-  CARGO_FLAGS: "build --release"
-  # Docker image to use for the job (can be overridden in CI variables)
-  RUST_IMAGE: "rust:latest"
-  # Enable backtraces for better error messages in CI logs
-  RUST_BACKTRACE: "1"
-  # Artifact name pattern
-  ARTIFACT_NAME: "AdaptiveIncarVolumeNormalisation_build_${CI_COMMIT_SHORT_SHA}"
+  COMPILER: gcc                                          #change the compiler as per your project
+  COMPILER_FLAGS: "-Wall -Wextra"
 
-build:
+build_and_link:
   stage: build
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
   tags:
     - JISVR_Hackathon
-  image: "$RUST_IMAGE"
-  before_script:
-    - rustc --version
-    - cargo --version
   script:
-    - echo "🚀 Starting Rust/Cargo build job"
+    - echo "🚀 Starting combined build and link job"
     - cd "$PROJECT_ROOT"
     - mkdir -p "$BUILD_DIR"
-    # Use cargo with an explicit target-dir so build artifacts land in BUILD_DIR
-    - $CARGO $CARGO_FLAGS --target-dir "$BUILD_DIR"
-    - echo "✅ Build complete"
-    - ls -la "$BUILD_DIR/release" || true
+    - |
+      for module in $MODULES; do
+        MODULE_SRC="$PROJECT_ROOT/$module/$MODULE_SRC_SUBDIR"
+        MODULE_INC="$PROJECT_ROOT/$module/$MODULE_INC_SUBDIR"
+        MODULE_BUILD_DIR="$BUILD_DIR/$module"
+        mkdir -p "$MODULE_BUILD_DIR"
+        for src_file in $(find "$MODULE_SRC" -name "*.c"); do
+          base_name=$(basename "$src_file" .c)
+          obj_file="$MODULE_BUILD_DIR/$base_name.o"
+          $COMPILER $COMPILER_FLAGS -I"$MODULE_INC" -c "$src_file" -o "$obj_file"
+        done
+      done
+    - |
+      INCLUDES=""
+      for module in $MODULES; do
+        INCLUDES="$INCLUDES -I$PROJECT_ROOT/$module/$MODULE_INC_SUBDIR"
+      done
+      $COMPILER $COMPILER_FLAGS $INCLUDES -c "$MAIN_C_PATH" -o "$BUILD_DIR/main.o"
+    - find "$BUILD_DIR" -name "*.o" > "$BUILD_DIR/objects.txt"
+    - $COMPILER --coverage -o "$BUILD_DIR/all_modules.exe" $(cat "$BUILD_DIR/objects.txt")
+    - echo "✅ Build and linking complete"
+
   artifacts:
-    name: "$ARTIFACT_NAME"
+    name: BuildAndLinkArtifacts
     paths:
-      - $BUILD_DIR/release/
-    expire_in: 1 week
+      - $BUILD_DIR
     when: always
-  cache:
-    key: "$CI_PROJECT_NAME-cargo"
-    paths:
-      - $CI_PROJECT_DIR/target
-      - $HOME/.cargo/registry
-      - $HOME/.cargo/git
