@@ -13,16 +13,15 @@ HTML = """
 <html>
   <head>
     <meta charset="utf-8" />
-    <title>Speed / Cabin Noise Dashboard</title>
+    <title>Speed / Cabin Noise UI</title>
     <style>
       * { box-sizing: border-box; }
       body {
         font-family: "Segoe UI", Arial, sans-serif;
         background: linear-gradient(135deg, #e3f2fd, #f5f5f5);
         display: flex;
-        flex-direction: column;
-        align-items: center;
         justify-content: center;
+        align-items: center;
         height: 100vh;
         margin: 0;
       }
@@ -31,15 +30,20 @@ HTML = """
         padding: 2rem 2.5rem;
         border-radius: 1rem;
         box-shadow: 0 6px 16px rgba(0,0,0,0.1);
-        width: 380px;
+        width: 360px;
         transition: all 0.3s ease;
+      }
+      .container:hover {
+        box-shadow: 0 8px 20px rgba(0,0,0,0.15);
       }
       h2 {
         text-align: center;
         margin-bottom: 1.5rem;
         color: #1976d2;
       }
-      .row { margin-bottom: 1.5rem; }
+      .row {
+        margin-bottom: 1.5rem;
+      }
       label {
         display: flex;
         justify-content: space-between;
@@ -82,66 +86,33 @@ HTML = """
         cursor: pointer;
         transition: background 0.3s ease;
       }
-      #send:hover { background: #125ea8; }
+      #send:hover {
+        background: #125ea8;
+      }
       .status {
         text-align: center;
         margin-top: 1rem;
         font-size: 0.9rem;
         color: #666;
+        transition: color 0.3s ease;
       }
-
-      /* Gauges */
-      .gauges {
-        display: flex;
-        justify-content: space-around;
-        margin-bottom: 2rem;
-      }
-      svg {
-        width: 120px;
-        height: 120px;
-      }
-      .gauge-text {
-        font-size: 1.2rem;
-        fill: #333;
-        font-weight: 600;
+      .status.active {
+        color: #43a047;
       }
     </style>
   </head>
-
   <body>
     <div class="container">
-      <h2>Speed / Noise Dashboard</h2>
+      <h2>Control Panel</h2>
 
-      <div class="gauges">
-        <!-- Speed Gauge -->
-        <svg id="speed_gauge" viewBox="0 0 100 100">
-          <circle cx="50" cy="50" r="45" stroke="#ddd" stroke-width="8" fill="none"/>
-          <path id="speed_arc" stroke="#1e88e5" stroke-width="8" fill="none"
-                stroke-linecap="round"
-                d="M50,5 A45,45 0 1,1 49.99,5" />
-          <text x="50" y="55" text-anchor="middle" class="gauge-text" id="speed_label">0</text>
-          <text x="50" y="75" text-anchor="middle" font-size="10" fill="#555">km/h</text>
-        </svg>
-
-        <!-- Cabin Noise Gauge -->
-        <svg id="noise_gauge" viewBox="0 0 100 100">
-          <circle cx="50" cy="50" r="45" stroke="#eee" stroke-width="8" fill="none"/>
-          <path id="noise_arc" stroke="#e53935" stroke-width="8" fill="none"
-                stroke-linecap="round"
-                d="M50,5 A45,45 0 1,1 49.99,5" />
-          <text x="50" y="55" text-anchor="middle" class="gauge-text" id="noise_label">0</text>
-          <text x="50" y="75" text-anchor="middle" font-size="10" fill="#555">dB</text>
-        </svg>
+      <div class="row">
+        <label for="cabin">Cabin Noise (dB): <span id="cabin_val">60.0</span></label>
+        <input id="cabin" type="range" min="30" max="100" step="0.1" value="60">
       </div>
 
       <div class="row">
         <label for="speed">Speed (km/h): <span id="speed_val">60.0</span></label>
         <input id="speed" type="range" min="0" max="200" step="0.1" value="60">
-      </div>
-
-      <div class="row">
-        <label for="cabin">Cabin noise (dB): <span id="cabin_val">60.0</span></label>
-        <input id="cabin" type="range" min="30" max="100" step="0.1" value="60">
       </div>
 
       <button id="send">Send to Server</button>
@@ -155,52 +126,36 @@ HTML = """
       const speedVal = document.getElementById('speed_val');
       const send = document.getElementById('send');
       const statusEl = document.getElementById('status');
-      const speedArc = document.getElementById('speed_arc');
-      const noiseArc = document.getElementById('noise_arc');
-      const speedLabel = document.getElementById('speed_label');
-      const noiseLabel = document.getElementById('noise_label');
-
-      let isUserInteracting = false;
-      let sendTimeout = null;
-
-      // Helper to update arc shape for gauge (0–1)
-      function setArc(path, ratio) {
-        const endAngle = Math.PI * (1 + ratio); // semi-circle sweep
-        const x = 50 + 45 * Math.cos(endAngle);
-        const y = 50 + 45 * Math.sin(endAngle);
-        const largeArc = ratio > 0.5 ? 1 : 0;
-        path.setAttribute("d", `M50,95 A45,45 0 ${largeArc},1 ${x},${y}`);
-      }
-
-      function updateGauges() {
-        const speedRatio = parseFloat(speed.value) / 200;
-        const noiseRatio = (parseFloat(cabin.value) - 30) / 70;
-        setArc(speedArc, speedRatio);
-        setArc(noiseArc, noiseRatio);
-        speedLabel.textContent = Math.round(speed.value);
-        noiseLabel.textContent = Math.round(cabin.value);
-      }
 
       function updateLabels() {
         cabinVal.textContent = parseFloat(cabin.value).toFixed(1);
         speedVal.textContent = parseFloat(speed.value).toFixed(1);
-        updateGauges();
+
+        // Color gradients change by values
+        const cabinColor = `linear-gradient(to right, #ffb74d ${cabin.value - 30}%, #e53935)`;
+        const speedColor = `linear-gradient(to right, #90caf9 ${speed.value / 2}%, #1e88e5)`;
+        cabin.style.background = cabinColor;
+        speed.style.background = speedColor;
       }
+
+      cabin.addEventListener('input', () => { updateLabels(); isUserInteracting = true; scheduleSend(); });
+      speed.addEventListener('input', () => { updateLabels(); isUserInteracting = true; scheduleSend(); });
 
       async function sendUpdate(body){
         try{
           statusEl.textContent = "Sending...";
-          statusEl.style.color = "#1976d2";
+          statusEl.classList.add('active');
           await fetch('/update', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
           statusEl.textContent = "✅ Sent";
-          statusEl.style.color = "#43a047";
-          setTimeout(()=>{ statusEl.textContent = "Idle"; statusEl.style.color="#666"; }, 1000);
+          setTimeout(()=>{ statusEl.textContent = "Idle"; statusEl.classList.remove('active'); }, 1000);
         }catch(e){
           statusEl.textContent = "⚠️ Send failed";
-          statusEl.style.color = "#e53935";
+          console.warn('update failed', e);
         }
       }
 
+      let isUserInteracting = false;
+      let sendTimeout = null;
       function scheduleSend(){
         if(sendTimeout) clearTimeout(sendTimeout);
         sendTimeout = setTimeout(() => {
@@ -209,9 +164,6 @@ HTML = """
           isUserInteracting = false;
         }, 200);
       }
-
-      cabin.addEventListener('input', () => { updateLabels(); isUserInteracting = true; scheduleSend(); });
-      speed.addEventListener('input', () => { updateLabels(); isUserInteracting = true; scheduleSend(); });
 
       send.addEventListener('click', async () => {
         const body = { cabin_db: parseFloat(cabin.value), speed_kmh: parseFloat(speed.value) };
@@ -229,7 +181,6 @@ HTML = """
         }catch(e){ console.warn('poll failed', e); }
         setTimeout(poll, 800);
       }
-
       updateLabels();
       poll();
     </script>
