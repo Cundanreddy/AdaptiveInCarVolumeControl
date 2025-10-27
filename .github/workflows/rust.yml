@@ -17,6 +17,11 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        # pkg-config is required for build.rs checks; libasound2-dev provides alsa.pc
+        sudo apt-get install -y pkg-config libasound2-dev build-essential
     - name: Build
       run: cargo build --verbose
     - name: Run tests
