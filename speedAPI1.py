@@ -11,93 +11,183 @@ STATE = {
 HTML = """
 <!doctype html>
 <html>
-    <head>
-        <meta charset="utf-8" />
-        <title>Speed / Cabin Noise UI</title>
-        <style>
-            body { font-family: Arial, sans-serif; margin: 2rem; }
-            .row { margin-bottom: 1rem; }
-            label { display:block; margin-bottom: .25rem; }
-        </style>
-    </head>
-    <body>
-        <h2>Control Panel</h2>
-        <div class="row">
-            <label for="cabin">Cabin noise (dB): <span id="cabin_val">60.0</span></label>
-            <input id="cabin" type="range" min="30" max="100" step="0.1" value="60">
-        </div>
-        <div class="row">
-            <label for="speed">Speed (km/h): <span id="speed_val">60.0</span></label>
-            <input id="speed" type="range" min="0" max="200" step="0.1" value="60">
-        </div>
-        <button id="send">Send to server</button>
+  <head>
+    <meta charset="utf-8" />
+    <title>Speed / Cabin Noise UI</title>
+    <style>
+      * { box-sizing: border-box; }
+      body {
+        font-family: "Segoe UI", Arial, sans-serif;
+        background: linear-gradient(135deg, #e3f2fd, #f5f5f5);
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        height: 100vh;
+        margin: 0;
+      }
+      .container {
+        background: #fff;
+        padding: 2rem 2.5rem;
+        border-radius: 1rem;
+        box-shadow: 0 6px 16px rgba(0,0,0,0.1);
+        width: 360px;
+        transition: all 0.3s ease;
+      }
+      .container:hover {
+        box-shadow: 0 8px 20px rgba(0,0,0,0.15);
+      }
+      h2 {
+        text-align: center;
+        margin-bottom: 1.5rem;
+        color: #1976d2;
+      }
+      .row {
+        margin-bottom: 1.5rem;
+      }
+      label {
+        display: flex;
+        justify-content: space-between;
+        margin-bottom: .5rem;
+        font-weight: 500;
+        color: #333;
+      }
+      input[type=range] {
+        width: 100%;
+        height: 6px;
+        appearance: none;
+        border-radius: 5px;
+        outline: none;
+        background: linear-gradient(to right, #90caf9, #1e88e5);
+        transition: background 0.3s ease;
+      }
+      input[type=range]::-webkit-slider-thumb {
+        appearance: none;
+        width: 18px;
+        height: 18px;
+        border-radius: 50%;
+        background: #fff;
+        border: 2px solid #1e88e5;
+        cursor: pointer;
+        transition: all 0.2s ease;
+      }
+      input[type=range]::-webkit-slider-thumb:hover {
+        transform: scale(1.1);
+        background: #1e88e5;
+      }
+      #send {
+        width: 100%;
+        padding: .75rem;
+        border: none;
+        border-radius: .5rem;
+        font-size: 1rem;
+        font-weight: 600;
+        background: #1976d2;
+        color: #fff;
+        cursor: pointer;
+        transition: background 0.3s ease;
+      }
+      #send:hover {
+        background: #125ea8;
+      }
+      .status {
+        text-align: center;
+        margin-top: 1rem;
+        font-size: 0.9rem;
+        color: #666;
+        transition: color 0.3s ease;
+      }
+      .status.active {
+        color: #43a047;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h2>Control Panel</h2>
 
-        <script>
-            const cabin = document.getElementById('cabin');
-            const speed = document.getElementById('speed');
-            const cabinVal = document.getElementById('cabin_val');
-            const speedVal = document.getElementById('speed_val');
-            const send = document.getElementById('send');
+      <div class="row">
+        <label for="cabin">Cabin Noise (dB): <span id="cabin_val">60.0</span></label>
+        <input id="cabin" type="range" min="30" max="100" step="0.1" value="60">
+      </div>
 
-            function updateLabels(){
-                cabinVal.textContent = parseFloat(cabin.value).toFixed(1);
-                speedVal.textContent = parseFloat(speed.value).toFixed(1);
-            }
-            cabin.addEventListener('input', updateLabels);
-            speed.addEventListener('input', updateLabels);
+      <div class="row">
+        <label for="speed">Speed (km/h): <span id="speed_val">60.0</span></label>
+        <input id="speed" type="range" min="0" max="200" step="0.1" value="60">
+      </div>
 
-            // Send update helper (used by interaction and the Send button)
-            async function sendUpdate(body){
-                try{
-                    await fetch('/update', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
-                }catch(e){ console.warn('update failed', e); }
-            }
+      <button id="send">Send to Server</button>
+      <div class="status" id="status">Idle</div>
+    </div>
 
-            // When user moves a slider we immediately update the UI locally and
-            // send the updated state to the server (debounced). While the user is
-            // interacting the background poll will not overwrite the UI.
-            let isUserInteracting = false;
-            let sendTimeout = null;
-            function scheduleSend(){
-                if(sendTimeout) clearTimeout(sendTimeout);
-                sendTimeout = setTimeout(() => {
-                    const body = { cabin_db: parseFloat(cabin.value), speed_kmh: parseFloat(speed.value) };
-                    sendUpdate(body);
-                    isUserInteracting = false;
-                }, 200); // 200ms debounce
-            }
+    <script>
+      const cabin = document.getElementById('cabin');
+      const speed = document.getElementById('speed');
+      const cabinVal = document.getElementById('cabin_val');
+      const speedVal = document.getElementById('speed_val');
+      const send = document.getElementById('send');
+      const statusEl = document.getElementById('status');
 
-            cabin.addEventListener('input', () => { updateLabels(); isUserInteracting = true; scheduleSend(); });
-            speed.addEventListener('input', () => { updateLabels(); isUserInteracting = true; scheduleSend(); });
+      function updateLabels() {
+        cabinVal.textContent = parseFloat(cabin.value).toFixed(1);
+        speedVal.textContent = parseFloat(speed.value).toFixed(1);
 
-            // Also support explicit Send button if desired (instant)
-            send.addEventListener('click', async () => {
-                const body = { cabin_db: parseFloat(cabin.value), speed_kmh: parseFloat(speed.value) };
-                isUserInteracting = true;
-                if(sendTimeout) clearTimeout(sendTimeout);
-                await sendUpdate(body);
-                isUserInteracting = false;
-            });
+        // Color gradients change by values
+        const cabinColor = `linear-gradient(to right, #ffb74d ${cabin.value - 30}%, #e53935)`;
+        const speedColor = `linear-gradient(to right, #90caf9 ${speed.value / 2}%, #1e88e5)`;
+        cabin.style.background = cabinColor;
+        speed.style.background = speedColor;
+      }
 
-            // poll current state every 500ms to initialize and keep UI in sync.
-            // If the user is currently interacting we skip the update to avoid
-            // reverting the slider while dragging.
-            async function poll(){
-                try{
-                    const r = await fetch('/state');
-                    const j = await r.json();
-                    if(!isUserInteracting){
-                        cabin.value = j.cabin_db; speed.value = j.speed_kmh; updateLabels();
-                    }
-                }catch(e){ console.warn('poll failed', e); }
-                setTimeout(poll, 500);
-            }
-            poll();
-        </script>
-    </body>
+      cabin.addEventListener('input', () => { updateLabels(); isUserInteracting = true; scheduleSend(); });
+      speed.addEventListener('input', () => { updateLabels(); isUserInteracting = true; scheduleSend(); });
+
+      async function sendUpdate(body){
+        try{
+          statusEl.textContent = "Sending...";
+          statusEl.classList.add('active');
+          await fetch('/update', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
+          statusEl.textContent = "✅ Sent";
+          setTimeout(()=>{ statusEl.textContent = "Idle"; statusEl.classList.remove('active'); }, 1000);
+        }catch(e){
+          statusEl.textContent = "⚠️ Send failed";
+          console.warn('update failed', e);
+        }
+      }
+
+      let isUserInteracting = false;
+      let sendTimeout = null;
+      function scheduleSend(){
+        if(sendTimeout) clearTimeout(sendTimeout);
+        sendTimeout = setTimeout(() => {
+          const body = { cabin_db: parseFloat(cabin.value), speed_kmh: parseFloat(speed.value) };
+          sendUpdate(body);
+          isUserInteracting = false;
+        }, 200);
+      }
+
+      send.addEventListener('click', async () => {
+        const body = { cabin_db: parseFloat(cabin.value), speed_kmh: parseFloat(speed.value) };
+        if(sendTimeout) clearTimeout(sendTimeout);
+        await sendUpdate(body);
+      });
+
+      async function poll(){
+        try{
+          const r = await fetch('/state');
+          const j = await r.json();
+          if(!isUserInteracting){
+            cabin.value = j.cabin_db; speed.value = j.speed_kmh; updateLabels();
+          }
+        }catch(e){ console.warn('poll failed', e); }
+        setTimeout(poll, 800);
+      }
+      updateLabels();
+      poll();
+    </script>
+  </body>
 </html>
-"""
 
+"""
 
 @app.route('/')
 def index():
