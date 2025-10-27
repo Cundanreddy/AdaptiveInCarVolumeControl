@@ -2,9 +2,9 @@ name: Rust
 
 on:
   push:
-    branches: [ "CICD_test" ]
+    branches: [ "main" ]
   pull_request:
-    branches: [ "CICD_test" ]
+    branches: [ "main" ]
   workflow_dispatch: {}   # optional: allow manual runs from the Actions UI
 
 env:
