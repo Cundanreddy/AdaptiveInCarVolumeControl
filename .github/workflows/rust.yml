@@ -5,6 +5,7 @@ on:
     branches: [ "CICD_test" ]
   pull_request:
     branches: [ "CICD_test" ]
+  workflow_dispatch: {}   # optional: allow manual runs from the Actions UI
 
 env:
   CARGO_TERM_COLOR: always
