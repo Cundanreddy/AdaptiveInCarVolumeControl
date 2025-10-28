@@ -148,3 +148,4 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("✅ Playback finished.");
     Ok(())
 }
+mod audio_playback6_test;

@@ -1,0 +1,65 @@
+image: rust:latest
+
+default:
+  tags:
+    - rust
+
+variables:
+  # Relative project path inside repository
+  PROJECT_REL: "AdaptiveIncarVolumeNormalisation"
+
+stages:
+  - build
+  - static_analysis
+  - test
+
+cache:
+  key: "$CI_PROJECT_NAME-cargo"
+  paths:
+    - $PROJECT_REL/target
+    - $HOME/.cargo/registry
+    - $HOME/.cargo/git
+
+build_job:
+  stage: build
+  script:
+    - echo "Building AdaptiveIncarVolumeNormalisation (release)"
+    - cd $PROJECT_REL
+    - cargo build --release
+  artifacts:
+    paths:
+      - $PROJECT_REL/target/release/
+    expire_in: 1 week
+
+static_analysis_job:
+  stage: static_analysis
+  before_script:
+    - cd $PROJECT_REL
+    - rustup component add clippy || true
+    - rustup component add rustfmt || true
+  script:
+    - echo "Running rustfmt (check)"
+    - cargo fmt --all -- --check
+    - echo "Running clippy"
+    - cargo clippy --all-targets --all-features -- -D warnings
+  allow_failure: false
+
+unit_test_job:
+  stage: test
+  before_script:
+    - cd $PROJECT_REL
+    - echo "Installing cargo-nextest"
+    - cargo install cargo-nextest --locked
+  script:
+    - mkdir -p target/nextest/ci
+    - echo "Running tests with cargo-nextest"
+    - cargo nextest run --profile ci || true
+  artifacts:
+    when: always
+    reports:
+      junit: $PROJECT_REL/target/nextest/ci/junit.xml
+    paths:
+      - $PROJECT_REL/target/nextest/ci/
+
+
+# working
